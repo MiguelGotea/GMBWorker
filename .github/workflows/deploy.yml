@@ -1,0 +1,85 @@
+name: 🚀 Deploy GMBWorker → VPS DigitalOcean
+
+# ════════════════════════════════════════════════════════════
+#  PRIMER DEPLOY (ejecutar solo 1 vez via SSH):
+#    ssh root@198.211.97.243
+#    mkdir -p /opt/gmb-worker
+#    cd /opt/gmb-worker
+#    npm install --production
+#    cp .env.example .env && nano .env   ← llenar tokens
+#    ufw allow 3009/tcp
+#    pm2 start ecosystem.config.js && pm2 save
+#
+#  Secrets requeridos en GitHub (Settings → Secrets → Actions):
+#    DO_HOST     = 198.211.97.243
+#    DO_USER     = root
+#    DO_SSH_KEY  = (contenido de la llave privada SSH)
+#    DO_PATH     = /opt/gmb-worker
+#
+#  Después del primer setup: todo es push a main. Cero SSH para código.
+# ════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout código
+      uses: actions/checkout@v4
+
+    - name: 🔑 Configurar SSH
+      uses: webfactory/ssh-agent@v0.8.0
+      with:
+        ssh-private-key: ${{ secrets.DO_SSH_KEY }}
+
+    - name: 📤 Deploy código → VPS
+      run: |
+        rsync -avz \
+          --exclude='.git/' \
+          --exclude='.github/' \
+          --exclude='.scripts/' \
+          --exclude='.agent/' \
+          --exclude='.gemini/' \
+          --exclude='.gitignore' \
+          --exclude='node_modules/' \
+          --exclude='logs/' \
+          --exclude='.env' \
+          -e "ssh -o StrictHostKeyChecking=no" \
+          ./ \
+          ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }}:${{ secrets.DO_PATH }}/
+
+    - name: 🔄 Actualizar dependencias y reiniciar worker
+      run: |
+        ssh -o StrictHostKeyChecking=no ${{ secrets.DO_USER }}@${{ secrets.DO_HOST }} << 'EOF'
+          set -e
+          cd ${{ secrets.DO_PATH }}
+
+          # Crear carpeta de logs si no existe
+          mkdir -p logs
+
+          # Actualizar dependencias Node
+          npm install --production --quiet
+
+          # Reiniciar en PM2 (si ya está registrado)
+          if pm2 list | grep -q "gmb-worker"; then
+            pm2 restart gmb-worker --update-env
+          else
+            echo "⚠️  gmb-worker no está en PM2. Primer deploy manual requerido."
+            echo "   Ejecuta: cd ${{ secrets.DO_PATH }} && pm2 start ecosystem.config.js && pm2 save"
+          fi
+
+          pm2 save
+          echo "--- Estado PM2 ---"
+          pm2 list
+        EOF
+
+    - name: ✅ Deploy completado
+      run: |
+        echo "✅ GMBWorker desplegado correctamente"
+        echo "📁 Ruta VPS: ${{ secrets.DO_PATH }}"
+        echo "🌐 VPS: ${{ secrets.DO_HOST }}"
+        echo "📊 Ver logs: pm2 logs gmb-worker"

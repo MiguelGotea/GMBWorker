@@ -1,0 +1,19 @@
+# Entorno — NO subir al repo
+.env
+
+# Dependencias Node
+node_modules/
+
+# Logs (generados en runtime)
+logs/
+*.log
+
+# IDE / Sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Agentes locales
+.agent/
+.gemini/

@@ -1,0 +1,20 @@
+{
+  "name": "gmb-worker",
+  "version": "1.0.0",
+  "description": "Google My Business Reviews Sync Worker — Batidos Pitaya",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node src/index.js",
+    "get-token": "node scripts/get-refresh-token.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "p-limit": "^3.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

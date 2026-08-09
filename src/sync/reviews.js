@@ -8,6 +8,12 @@
  *   ELIMINADA → existe en BD pero no vino de Google   → soft delete (deleted_at)
  *
  * Idempotente: correr dos veces no genera duplicados ni errores.
+ *
+ * runSync(params) acepta parámetros opcionales:
+ *   locationId  → procesa solo esa sucursal (string Google location ID)
+ *   dateFrom    → filtra reviews por createTime >= dateFrom (YYYY-MM-DD)
+ *   dateTo      → filtra reviews por createTime <= dateTo  (YYYY-MM-DD)
+ *   Sin params  → sync global (todas las tiendas, todas las fechas)
  */
 
 'use strict';
@@ -63,12 +69,36 @@ function mapReview(gReview, locationId, locationName) {
   };
 }
 
+// ── Filtro de fecha sobre reviews de Google ───────────────────────────────────
+
+/**
+ * Filtra un array de reviews de Google API por rango de createTime.
+ * @param {Array}  reviews   reviews crudos de Google
+ * @param {string} dateFrom  YYYY-MM-DD (inclusive) o null
+ * @param {string} dateTo    YYYY-MM-DD (inclusive) o null
+ * @returns {Array} reviews filtrados
+ */
+function filterByDate(reviews, dateFrom, dateTo) {
+  if (!dateFrom && !dateTo) return reviews;
+
+  const from = dateFrom ? new Date(dateFrom + 'T00:00:00Z') : null;
+  const to   = dateTo   ? new Date(dateTo   + 'T23:59:59Z') : null;
+
+  return reviews.filter((r) => {
+    if (!r.createTime) return true; // si no tiene fecha, dejar pasar
+    const t = new Date(r.createTime);
+    if (from && t < from) return false;
+    if (to   && t > to)   return false;
+    return true;
+  });
+}
+
 // ── Lógica de diff por location ───────────────────────────────────────────────
 
 /**
  * Procesa el diff entre Google y la BD para una location.
  * @param {{locationId, locationName, accountId}} locationInfo
- * @param {Array} googleReviews  reviews crudos de la API de Google
+ * @param {Array}  googleReviews  reviews (ya filtrados por fecha si aplica)
  * @returns {Promise<{locationId, locationName, inserted, updated, deleted, errors}>}
  */
 async function syncLocation(locationInfo, googleReviews) {
@@ -113,6 +143,8 @@ async function syncLocation(locationInfo, googleReviews) {
     }
 
     // Revisar reviews en BD que ya no están en Google → ELIMINADAS
+    // Nota: cuando se filtra por fecha, solo se marcan como eliminadas las de ese
+    // rango que ya no estén en Google — las de otros meses no se tocan.
     for (const reviewId of Object.keys(existing)) {
       if (!googleMap[reviewId]) {
         operations.push({ action: 'delete', review: { reviewId, locationId } });
@@ -141,18 +173,23 @@ async function syncLocation(locationInfo, googleReviews) {
 // ── Orquestador principal ─────────────────────────────────────────────────────
 
 /**
- * Corre el sync completo:
+ * Corre el sync (global o parcial según params):
  *   1. Obtiene cuentas y locations de Google
- *   2. Para cada location (con p-limit), descarga reviews y hace diff
- *   3. Guarda resultado en logs/last-sync.json
+ *   2. Si params.locationId → procesa solo esa location
+ *   3. Descarga reviews; si params.dateFrom/dateTo → filtra por createTime
+ *   4. Diff inteligente (insert/update/delete) para cada location
+ *   5. Guarda resultado en logs/last-sync.json
  *
  * Es idempotente: puede correrse múltiples veces sin duplicados.
+ * @param {object} params  { locationId?, dateFrom?, dateTo? } — todos opcionales
  * @returns {Promise<object>} resultado del sync
  */
-async function runSync() {
+async function runSync(params = {}) {
   if (syncState.running) {
     return { already_running: true, startedAt: syncState.startedAt };
   }
+
+  const { locationId = null, dateFrom = null, dateTo = null } = params;
 
   syncState.running    = true;
   syncState.startedAt  = new Date().toISOString();
@@ -168,13 +205,18 @@ async function runSync() {
   const log = (msg) => { const line = `[${ts()}] ${msg}`; console.log(line); logLines.push(line); };
 
   try {
-    log('════════ GMB Sync iniciado ════════');
+    // Describir qué tipo de sync se está corriendo
+    const syncDesc = [
+      locationId ? `tienda: ${locationId}` : 'todas las tiendas',
+      dateFrom || dateTo ? `fechas: ${dateFrom || '*'} → ${dateTo || '*'}` : 'todas las fechas'
+    ].join(' | ');
+    log(`════════ GMB Sync iniciado [${syncDesc}] ════════`);
 
     // 1. Cuentas de Google
     const accounts = await gmb.getAccounts();
     log(`Cuentas Google encontradas: ${accounts.length}`);
 
-    // 2. Locations de Google (todas, sin filtro)
+    // 2. Locations de Google (todas)
     const allGoogleLocations = [];
     for (const account of accounts) {
       const locs = await gmb.getLocations(account.accountId);
@@ -198,15 +240,32 @@ async function runSync() {
       if (nameMap[loc.locationId]) loc.locationName = nameMap[loc.locationId];
     }
 
-    log(`Total sucursales a sincronizar: ${allGoogleLocations.length}`);
+    // 4. Aplicar filtro de tienda si viene locationId
+    const locationsToProcess = locationId
+      ? allGoogleLocations.filter((l) => l.locationId === locationId)
+      : allGoogleLocations;
 
-    // 4. Procesar con concurrencia limitada
-    const tasks = allGoogleLocations.map((locationInfo) =>
+    if (locationId && locationsToProcess.length === 0) {
+      log(`WARN: locationId "${locationId}" no encontrado en Google. Abortando.`);
+      syncState.result = { success: false, error: `locationId "${locationId}" no encontrado en Google` };
+      return syncState.result;
+    }
+
+    log(`Sucursales a procesar: ${locationsToProcess.length}${locationId ? ` (filtrado)` : ''}`);
+
+    // 5. Procesar con concurrencia limitada
+    const tasks = locationsToProcess.map((locationInfo) =>
       limit(async () => {
         log(`→ Procesando: ${locationInfo.locationName || locationInfo.locationId}`);
 
-        const googleReviews = await gmb.getLocationReviews(locationInfo.accountId, locationInfo.locationId);
-        log(`  Google: ${googleReviews.length} reseñas encontradas`);
+        let googleReviews = await gmb.getLocationReviews(locationInfo.accountId, locationInfo.locationId);
+        log(`  Google: ${googleReviews.length} reseñas encontradas (total)`);
+
+        // Aplicar filtro de fecha si viene dateFrom/dateTo
+        if (dateFrom || dateTo) {
+          googleReviews = filterByDate(googleReviews, dateFrom, dateTo);
+          log(`  Después de filtro de fecha: ${googleReviews.length} reseñas`);
+        }
 
         const result = await syncLocation(locationInfo, googleReviews);
         const errMsg = result.errors.length ? ` | ${result.errors.length} error(es)` : '';

@@ -59,22 +59,32 @@ const server = http.createServer(async (req, res) => {
 
   // POST /sync/trigger
   if (method === 'POST' && url === '/sync/trigger') {
-    const state = getSyncState();
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', async () => {
+      let params = {};
+      try {
+        if (body) params = JSON.parse(body);
+      } catch (e) {
+        return sendJSON(res, 400, { error: 'JSON inválido' });
+      }
 
-    if (state.running) {
-      sendJSON(res, 409, {
-        error:      'El sync ya está en ejecución',
-        startedAt:  state.startedAt
+      const state = getSyncState();
+      if (state.running) {
+        sendJSON(res, 409, {
+          error:      'El sync ya está en ejecución',
+          startedAt:  state.startedAt
+        });
+        return;
+      }
+
+      // Lanzar async sin esperar — el cliente recibe 202 inmediatamente
+      runSync(params).catch((err) => console.error('[Server] Error en sync manual:', err.message));
+
+      sendJSON(res, 202, {
+        message:   'Sync iniciado',
+        startedAt: new Date().toISOString()
       });
-      return;
-    }
-
-    // Lanzar async sin esperar — el cliente recibe 202 inmediatamente
-    runSync().catch((err) => console.error('[Server] Error en sync manual:', err.message));
-
-    sendJSON(res, 202, {
-      message:   'Sync iniciado',
-      startedAt: new Date().toISOString()
     });
     return;
   }

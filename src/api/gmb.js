@@ -14,12 +14,12 @@ const googleAuth = require('../auth/google');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Fetch con auto-refresh de token y retry exponencial en 429.
+ * Fetch con auto-refresh de token y retry exponencial en 429/503.
  * @param {string} url
  * @param {object} options  opciones fetch (sin Authorization, se agrega automático)
- * @param {number} retries  máximo de reintentos ante 429 (default 3)
+ * @param {number} retries  máximo de reintentos (default 5)
  */
-async function fetchGMB(url, options = {}, retries = 3) {
+async function fetchGMB(url, options = {}, retries = 5) {
   for (let attempt = 0; attempt <= retries; attempt++) {
     const token = await googleAuth.getAccessToken();
 
@@ -31,9 +31,16 @@ async function fetchGMB(url, options = {}, retries = 3) {
       }
     });
 
-    if (res.status === 429) {
-      const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s, 8s
-      console.warn(`[GMB] Rate limit (429). Esperando ${delay}ms (intento ${attempt + 1}/${retries})`);
+    // 401/403 → credenciales inválidas, no tiene sentido reintentar
+    if (res.status === 401 || res.status === 403) {
+      const body = await res.text();
+      throw new Error(`[GMB] Sin autorización (${res.status}) para ${url}: ${body.slice(0, 200)}`);
+    }
+
+    // 429 / 503 → rate limit o servicio no disponible → esperar y reintentar
+    if (res.status === 429 || res.status === 503) {
+      const delay = Math.pow(2, attempt) * 2000 + Math.random() * 1000; // 2s, 4s, 8s, 16s, 32s + jitter
+      console.warn(`[GMB] ${res.status} Rate limit. Esperando ${Math.round(delay/1000)}s (intento ${attempt + 1}/${retries + 1})`);
       await sleep(delay);
       continue;
     }

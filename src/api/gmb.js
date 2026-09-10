@@ -112,15 +112,15 @@ async function getLocationReviews(accountId, locationId) {
   let page = 1;
 
   do {
-    // mybusinessreviews v1 es el endpoint activo (v4 mybusiness está deprecated)
-    let url = `https://mybusinessreviews.googleapis.com/v1/accounts/${accountId}/locations/${locationId}/reviews?pageSize=50`;
+    // mybusiness.googleapis.com/v4 — endpoint que funcionaba (429s en agosto lo confirman)
+    let url = `https://mybusiness.googleapis.com/v4/accounts/${accountId}/locations/${locationId}/reviews?pageSize=100`;
     if (pageToken) url += `&pageToken=${encodeURIComponent(pageToken)}`;
 
     const res = await fetchGMB(url);
 
     if (!res.ok) {
       const body = await res.text();
-      console.warn(`[GMB] getLocationReviews(${locationId}) pág ${page} → ${res.status}: ${body}`);
+      console.warn(`[GMB] getLocationReviews(${locationId}) pág ${page} → ${res.status}: ${body.substring(0, 200)}`);
       break;
     }
 
@@ -133,8 +133,7 @@ async function getLocationReviews(accountId, locationId) {
     pageToken = data.nextPageToken || null;
 
     if (pageToken) {
-      // Pausa cortés entre páginas para evitar rate limit
-      await sleep(500);
+      await sleep(300);
     }
 
     page++;

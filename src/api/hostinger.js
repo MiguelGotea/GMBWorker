@@ -26,7 +26,7 @@
 const USE_DIRECT_DB = true;
 
 // ── Carga de submódulos separados ─────────────────────────────────────────────
-const hostingerApi      = require('./hostinger_api');
+const hostingerApi = require('./hostinger_api');
 const hostingerDirectDb = require('./hostinger_direct_db');
 
 // Seleccionar cliente activo
@@ -74,6 +74,6 @@ module.exports = {
   getExistingReviews,
   upsertReviews,
   // Acceso directo a los submódulos para pruebas o tareas avanzadas
-  _api:      hostingerApi,
+  _api: hostingerApi,
   _directDb: hostingerDirectDb
 };

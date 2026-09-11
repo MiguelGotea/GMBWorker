@@ -141,73 +141,89 @@ async function upsertReviews(locationId, operations) {
 
   const now = formatDate(new Date());
 
+  const CHUNK_SIZE = 50;
+
   try {
-    await conn.beginTransaction();
+    for (let i = 0; i < operations.length; i += CHUNK_SIZE) {
+      const chunk = operations.slice(i, i + CHUNK_SIZE);
+      let attempts = 0;
+      let committed = false;
 
-    for (const op of operations) {
-      try {
-        const r = op.review;
+      while (attempts < 3 && !committed) {
+        attempts++;
+        try {
+          await conn.beginTransaction();
 
-        if (op.action === 'insert') {
-          await conn.query(`
-            INSERT INTO ResenasGoogle
-              (locationId, locationName, reviewId, reviewerName,
-               starRating, comment, createTime, updateTime,
-               reviewReplyComment, reviewReplyUpdateTime, extractionDate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE
-              comment               = VALUES(comment),
-              starRating            = VALUES(starRating),
-              createTime            = VALUES(createTime),
-              updateTime            = VALUES(updateTime),
-              reviewReplyComment    = VALUES(reviewReplyComment),
-              reviewReplyUpdateTime = VALUES(reviewReplyUpdateTime),
-              extractionDate        = VALUES(extractionDate),
-              deleted_at            = NULL
-          `, [
-            r.locationId, r.locationName, r.reviewId, r.reviewerName,
-            r.starRating, truncate(r.comment), r.createTime, r.updateTime,
-            truncate(r.reviewReplyComment), r.reviewReplyUpdateTime, now
-          ]);
-          inserted++;
+          for (const op of chunk) {
+            const r = op.review;
 
-        } else if (op.action === 'update') {
-          await conn.query(`
-            UPDATE ResenasGoogle SET
-              comment               = ?,
-              starRating            = ?,
-              createTime            = ?,
-              updateTime            = ?,
-              reviewReplyComment    = ?,
-              reviewReplyUpdateTime = ?,
-              extractionDate        = ?,
-              deleted_at            = NULL
-            WHERE reviewId = ? AND locationId = ?
-          `, [
-            truncate(r.comment), r.starRating, r.createTime, r.updateTime,
-            truncate(r.reviewReplyComment), r.reviewReplyUpdateTime, now,
-            r.reviewId, r.locationId
-          ]);
-          updated++;
+            if (op.action === 'insert') {
+              await conn.query(`
+                INSERT INTO ResenasGoogle
+                  (locationId, locationName, reviewId, reviewerName,
+                   starRating, comment, createTime, updateTime,
+                   reviewReplyComment, reviewReplyUpdateTime, extractionDate)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                  comment               = VALUES(comment),
+                  starRating            = VALUES(starRating),
+                  createTime            = VALUES(createTime),
+                  updateTime            = VALUES(updateTime),
+                  reviewReplyComment    = VALUES(reviewReplyComment),
+                  reviewReplyUpdateTime = VALUES(reviewReplyUpdateTime),
+                  extractionDate        = VALUES(extractionDate),
+                  deleted_at            = NULL
+              `, [
+                r.locationId, r.locationName, r.reviewId, r.reviewerName,
+                r.starRating, truncate(r.comment), r.createTime, r.updateTime,
+                truncate(r.reviewReplyComment), r.reviewReplyUpdateTime, now
+              ]);
+              inserted++;
 
-        } else if (op.action === 'delete') {
-          await conn.query(`
-            UPDATE ResenasGoogle SET deleted_at = ?
-            WHERE reviewId = ? AND locationId = ?
-          `, [now, r.reviewId, r.locationId]);
-          deleted++;
+            } else if (op.action === 'update') {
+              await conn.query(`
+                UPDATE ResenasGoogle SET
+                  comment               = ?,
+                  starRating            = ?,
+                  createTime            = ?,
+                  updateTime            = ?,
+                  reviewReplyComment    = ?,
+                  reviewReplyUpdateTime = ?,
+                  extractionDate        = ?,
+                  deleted_at            = NULL
+                WHERE reviewId = ? AND locationId = ?
+              `, [
+                truncate(r.comment), r.starRating, r.createTime, r.updateTime,
+                truncate(r.reviewReplyComment), r.reviewReplyUpdateTime, now,
+                r.reviewId, r.locationId
+              ]);
+              updated++;
+
+            } else if (op.action === 'delete') {
+              await conn.query(`
+                UPDATE ResenasGoogle SET deleted_at = ?
+                WHERE reviewId = ? AND locationId = ?
+              `, [now, r.reviewId, r.locationId]);
+              deleted++;
+            }
+          }
+
+          await conn.commit();
+          committed = true;
+        } catch (err) {
+          await conn.rollback();
+          const isLock = err.message.includes('Lock wait timeout') || err.message.includes('Deadlock');
+          if (isLock && attempts < 3) {
+            console.warn(`[DB-DIRECTO-TEMPORAL] Bloqueo detectado en lote ${i}-${i + chunk.length}, reintentando (${attempts}/3)...`);
+            await new Promise(r => setTimeout(r, 1000 * attempts));
+          } else {
+            errors.push(`Lote ${i}-${i + chunk.length}: ${err.message}`);
+            console.error(`[DB-DIRECTO-TEMPORAL] Error en lote ${i}-${i + chunk.length}:`, err.message);
+            break;
+          }
         }
-
-      } catch (err) {
-        errors.push(`${op.action} ${op.review?.reviewId}: ${err.message}`);
-        console.error(`[DB-DIRECTO-TEMPORAL] Error en op ${op.action}:`, err.message);
       }
     }
-
-    await conn.commit();
-  } catch (err) {
-    await conn.rollback();
-    throw err;
   } finally {
     conn.release();
   }

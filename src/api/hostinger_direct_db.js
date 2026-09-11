@@ -66,7 +66,18 @@ function truncate(str, max = 3000) {
 function formatDate(dateStr) {
   if (!dateStr) return '';
   try {
-    return new Date(dateStr).toISOString().slice(0, 19).replace('T', ' ');
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'America/Managua',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).format(d).replace('T', ' ');
   } catch {
     return '';
   }
@@ -104,7 +115,7 @@ async function getLocations() {
 async function getExistingReviews(locationId) {
   const db = getPool();
   const [rows] = await db.query(
-    `SELECT reviewId, comment, starRating, reviewReplyComment
+    `SELECT reviewId, comment, starRating, createTime, updateTime, reviewReplyComment
      FROM ResenasGoogle
      WHERE locationId = ? AND deleted_at IS NULL`,
     [locationId]
@@ -128,7 +139,7 @@ async function upsertReviews(locationId, operations) {
   let inserted = 0, updated = 0, deleted = 0;
   const errors = [];
 
-  const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+  const now = formatDate(new Date());
 
   try {
     await conn.beginTransaction();
@@ -147,6 +158,7 @@ async function upsertReviews(locationId, operations) {
             ON DUPLICATE KEY UPDATE
               comment               = VALUES(comment),
               starRating            = VALUES(starRating),
+              createTime            = VALUES(createTime),
               updateTime            = VALUES(updateTime),
               reviewReplyComment    = VALUES(reviewReplyComment),
               reviewReplyUpdateTime = VALUES(reviewReplyUpdateTime),
@@ -164,6 +176,7 @@ async function upsertReviews(locationId, operations) {
             UPDATE ResenasGoogle SET
               comment               = ?,
               starRating            = ?,
+              createTime            = ?,
               updateTime            = ?,
               reviewReplyComment    = ?,
               reviewReplyUpdateTime = ?,
@@ -171,7 +184,7 @@ async function upsertReviews(locationId, operations) {
               deleted_at            = NULL
             WHERE reviewId = ? AND locationId = ?
           `, [
-            truncate(r.comment), r.starRating, r.updateTime,
+            truncate(r.comment), r.starRating, r.createTime, r.updateTime,
             truncate(r.reviewReplyComment), r.reviewReplyUpdateTime, now,
             r.reviewId, r.locationId
           ]);

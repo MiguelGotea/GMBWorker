@@ -38,10 +38,26 @@ const syncState = {
 function formatDate(dateStr) {
   if (!dateStr) return '';
   try {
-    return new Date(dateStr).toISOString().slice(0, 19).replace('T', ' ');
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    // Formatear en zona horaria America/Managua (Nicaragua, UTC-6) -> YYYY-MM-DD HH:mm:ss
+    return new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'America/Managua',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    }).format(d).replace('T', ' ');
   } catch {
     return '';
   }
+}
+
+function getNowNica() {
+  return formatDate(new Date());
 }
 
 function truncate(str, max = 3000) {
@@ -50,7 +66,7 @@ function truncate(str, max = 3000) {
 }
 
 /**
- * Convierte un review de la Google API al formato de la tabla ResenasGoogle.
+ * Convierte un review de la Google API al formato de la tabla ResenasGoogle en hora de Nicaragua.
  */
 function mapReview(gReview, locationId, locationName) {
   const reply = gReview.reviewReply;
@@ -65,14 +81,14 @@ function mapReview(gReview, locationId, locationName) {
     updateTime:            formatDate(gReview.updateTime),
     reviewReplyComment:    reply ? truncate(reply.comment || '') : '',
     reviewReplyUpdateTime: reply ? formatDate(reply.updateTime) : '',
-    extractionDate:        new Date().toISOString().slice(0, 19).replace('T', ' ')
+    extractionDate:        getNowNica()
   };
 }
 
 // ── Filtro de fecha sobre reviews de Google ───────────────────────────────────
 
 /**
- * Filtra un array de reviews de Google API por rango de createTime.
+ * Filtra un array de reviews de Google API por rango de createTime (hora Nicaragua).
  * @param {Array}  reviews   reviews crudos de Google
  * @param {string} dateFrom  YYYY-MM-DD (inclusive) o null
  * @param {string} dateTo    YYYY-MM-DD (inclusive) o null
@@ -81,14 +97,13 @@ function mapReview(gReview, locationId, locationName) {
 function filterByDate(reviews, dateFrom, dateTo) {
   if (!dateFrom && !dateTo) return reviews;
 
-  const from = dateFrom ? new Date(dateFrom + 'T00:00:00Z') : null;
-  const to   = dateTo   ? new Date(dateTo   + 'T23:59:59Z') : null;
-
   return reviews.filter((r) => {
-    if (!r.createTime) return true; // si no tiene fecha, dejar pasar
-    const t = new Date(r.createTime);
-    if (from && t < from) return false;
-    if (to   && t > to)   return false;
+    if (!r.createTime) return true;
+    const nicaTime = formatDate(r.createTime);
+    if (!nicaTime) return true;
+    const datePart = nicaTime.slice(0, 10);
+    if (dateFrom && datePart < dateFrom) return false;
+    if (dateTo   && datePart > dateTo)   return false;
     return true;
   });
 }
@@ -131,12 +146,14 @@ async function syncLocation(locationInfo, googleReviews) {
         operations.push({ action: 'insert', review: formatted });
       } else {
         const db = existing[reviewId];
-        const commentChanged = formatted.comment           !== (db.comment           || '');
-        const ratingChanged  = formatted.starRating        !== (db.starRating        || '');
-        const replyChanged   = formatted.reviewReplyComment !== (db.reviewReplyComment || '');
+        const commentChanged    = formatted.comment            !== (db.comment            || '');
+        const ratingChanged     = formatted.starRating         !== (db.starRating         || '');
+        const replyChanged      = formatted.reviewReplyComment !== (db.reviewReplyComment  || '');
+        const createTimeChanged = formatted.createTime        !== (db.createTime         || '');
+        const updateTimeChanged = formatted.updateTime        !== (db.updateTime         || '');
 
-        if (commentChanged || ratingChanged || replyChanged) {
-          // EDITADA o RESPUESTA nueva/editada
+        if (commentChanged || ratingChanged || replyChanged || createTimeChanged || updateTimeChanged) {
+          // EDITADA, RESPUESTA nueva/editada o FECHA alineada a hora local
           operations.push({ action: 'update', review: formatted });
         }
       }

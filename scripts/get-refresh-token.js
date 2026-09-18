@@ -1,26 +1,25 @@
 /**
- * get-refresh-token.js — Script ONE-TIME para obtener el refresh_token de Google
+ * get-refresh-token.js — Script para obtener el refresh_token de Google
  *
  * Uso:
- *   1. Completa GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET en tu .env LOCAL
- *   2. node scripts/get-refresh-token.js
- *   3. Abre la URL en el navegador, autoriza con la cuenta de Google Business
- *   4. Copia el código y pégalo aquí
- *   5. Copia el refresh_token al .env del VPS
- *
- * Este script solo se corre UNA VEZ localmente. El refresh_token no expira
- * (a menos que se revoque manualmente en Google Account → Seguridad → Acceso).
+ *   1. node scripts/get-refresh-token.js
+ *   2. Se abrirá automáticamente tu navegador (o copia la URL).
+ *   3. Inicia sesión y autoriza a Batidos Pitaya.
+ *   4. El script captura automáticamente el token en http://127.0.0.1:8085.
  */
 
 'use strict';
 
 require('dotenv').config();
+const http     = require('http');
+const url      = require('url');
 const fetch    = require('node-fetch');
-const readline = require('readline');
+const { exec } = require('child_process');
 
 const CLIENT_ID     = process.env.GOOGLE_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
-const REDIRECT_URI  = 'urn:ietf:wg:oauth:2.0:oob'; // Flujo Desktop App
+const PORT          = 8085;
+const REDIRECT_URI  = `http://127.0.0.1:${PORT}`;
 
 if (!CLIENT_ID || !CLIENT_SECRET) {
   console.error('\n❌ ERROR: Agrega GOOGLE_CLIENT_ID y GOOGLE_CLIENT_SECRET al .env primero.\n');
@@ -35,62 +34,110 @@ const authUrl = [
   `&response_type=code`,
   `&scope=${encodeURIComponent(SCOPE)}`,
   `&access_type=offline`,
-  `&prompt=consent`   // fuerza mostrar el refresh_token aunque ya haya autorizado antes
+  `&prompt=consent`
 ].join('');
 
-console.log('\n╔══════════════════════════════════════════════════════╗');
-console.log('║   GMB Worker — Obtener Google Refresh Token          ║');
-console.log('╚══════════════════════════════════════════════════════╝\n');
+const server = http.createServer(async (req, res) => {
+  const parsedUrl = url.parse(req.url, true);
 
-console.log('PASO 1: Abre este URL en tu navegador (Chrome recomendado):\n');
-console.log('  ' + authUrl);
-console.log('\n──────────────────────────────────────────────────────');
-console.log('PASO 2: Inicia sesión con la cuenta de Google que administra');
-console.log('  el perfil de negocio (Google Business Profile).');
-console.log('  Haz clic en "Continuar" aunque aparezca advertencia de app no verificada.');
-console.log('\nPASO 3: Google te mostrará un código. Cópialo.');
-console.log('──────────────────────────────────────────────────────\n');
+  if (parsedUrl.pathname === '/' || parsedUrl.pathname === '') {
+    const code  = parsedUrl.query.code;
+    const error = parsedUrl.query.error;
 
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-rl.question('PASO 4: Pega el código aquí y presiona Enter:\n> ', async (code) => {
-  rl.close();
-  code = (code || '').trim();
-
-  if (!code) {
-    console.error('\n❌ No se ingresó ningún código.\n');
-    process.exit(1);
-  }
-
-  console.log('\nIntercambiando código por tokens...');
-
-  try {
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id:     CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        redirect_uri:  REDIRECT_URI,
-        grant_type:    'authorization_code'
-      })
-    });
-
-    const data = await res.json();
-
-    if (data.refresh_token) {
-      console.log('\n✅ ¡Éxito! Agrega esto al .env del VPS:\n');
-      console.log(`  GOOGLE_REFRESH_TOKEN=${data.refresh_token}`);
-      console.log('\n⚠️  Guárdalo en un lugar seguro. No vuelve a mostrarse.');
-      console.log('    Si lo pierdes, debes repetir este proceso.\n');
-    } else if (data.error) {
-      console.error('\n❌ Error de Google:', data.error, '-', data.error_description);
-      console.error('   Respuesta completa:', JSON.stringify(data, null, 2));
-    } else {
-      console.error('\n❌ Respuesta inesperada:', JSON.stringify(data, null, 2));
+    if (error) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="utf-8"><title>Error de Autorización</title></head>
+        <body style="font-family:sans-serif; text-align:center; padding:50px;">
+          <h1 style="color:#d32f2f;">❌ Error al autorizar</h1>
+          <p>${error}</p>
+        </body>
+        </html>
+      `);
+      console.error('\n❌ Error retornado por Google:', error);
+      server.close();
+      process.exit(1);
     }
-  } catch (err) {
-    console.error('\n❌ Error de red:', err.message);
+
+    if (!code) {
+      res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<h1>No se recibió el código de autorización</h1>');
+      return;
+    }
+
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(`
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><title>Autorización Exitosa</title></head>
+      <body style="font-family:sans-serif; text-align:center; padding:60px 20px; background:#f4f9f4;">
+        <h1 style="color:#1b5e20; font-size:32px;">✅ ¡Autorización Exitosa!</h1>
+        <p style="font-size:18px; color:#333;">Google ha transferido las credenciales a tu script local.</p>
+        <p style="font-size:16px; color:#666;">Ya puedes cerrar esta pestaña del navegador y volver a la terminal de VS Code.</p>
+      </body>
+      </html>
+    `);
+
+    console.log('\n[✓] Código de autorización recibido con éxito.');
+    console.log('    Intercambiando código por refresh_token con Google...');
+
+    try {
+      const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id:     CLIENT_ID,
+          client_secret: CLIENT_SECRET,
+          redirect_uri:  REDIRECT_URI,
+          grant_type:    'authorization_code'
+        })
+      });
+
+      const data = await tokenRes.json();
+
+      if (data.refresh_token) {
+        console.log('\n╔══════════════════════════════════════════════════════════════════════════╗');
+        console.log('║               ✅ ¡REFRESH TOKEN OBTENIDO EXITOSAMENTE!                   ║');
+        console.log('╚══════════════════════════════════════════════════════════════════════════╝\n');
+        console.log(`GOOGLE_REFRESH_TOKEN=${data.refresh_token}\n`);
+        console.log('──────────────────────────────────────────────────────────────────────────');
+        console.log('Copia este valor y colócalo en el .env del VPS (/opt/gmb-worker/.env)');
+        console.log('──────────────────────────────────────────────────────────────────────────\n');
+      } else {
+        console.error('\n❌ Google no devolvió un refresh_token:', JSON.stringify(data, null, 2));
+      }
+    } catch (err) {
+      console.error('\n❌ Error de red al solicitar el token:', err.message);
+    } finally {
+      setTimeout(() => {
+        server.close();
+        process.exit(0);
+      }, 1000);
+    }
   }
+});
+
+server.listen(PORT, '127.0.0.1', () => {
+  console.log('\n╔══════════════════════════════════════════════════════╗');
+  console.log('║   GMB Worker — Obtener Google Refresh Token          ║');
+  console.log('╚══════════════════════════════════════════════════════╝\n');
+  console.log(`[✓] Servidor local escuchando en: ${REDIRECT_URI}`);
+  console.log('[✓] Intentando abrir el navegador automáticamente...\n');
+  console.log('Si no se abre automáticamente, haz Clic o copia este enlace en tu navegador:\n');
+  console.log('  ' + authUrl + '\n');
+  console.log('──────────────────────────────────────────────────────');
+  console.log('Esperando que autorices en Google...');
+
+  const startCmd = process.platform === 'win32'
+    ? `start "" "${authUrl}"`
+    : (process.platform === 'darwin' ? `open "${authUrl}"` : `xdg-open "${authUrl}"`);
+
+  exec(startCmd, (err) => {
+    if (err) {
+      // Si falla abrir el navegador automáticamente, no pasa nada, ya imprimió el link
+    }
+  });
 });

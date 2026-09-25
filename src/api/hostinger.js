@@ -23,7 +23,7 @@
 // ── INTERRUPTOR DE MODO DE CONEXIÓN ───────────────────────────────────────────
 // true  → Conexión DIRECTA a MySQL Hostinger (Ajuste temporal por bloqueo TLS VPS <-> API)
 // false → Conexión ESTÁNDAR vía https://api.batidospitaya.com (Modo original)
-const USE_DIRECT_DB = true;
+const USE_DIRECT_DB = false;
 
 // ── Carga de submódulos separados ─────────────────────────────────────────────
 const hostingerApi = require('./hostinger_api');

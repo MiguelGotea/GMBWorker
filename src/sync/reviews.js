@@ -116,7 +116,7 @@ function filterByDate(reviews, dateFrom, dateTo) {
  * @param {Array}  googleReviews  reviews (ya filtrados por fecha si aplica)
  * @returns {Promise<{locationId, locationName, inserted, updated, deleted, errors}>}
  */
-async function syncLocation(locationInfo, googleReviews, dateFrom = null, dateTo = null) {
+async function syncLocation(locationInfo, googleReviews) {
   const { locationId, locationName } = locationInfo;
   const logEntry = { locationId, locationName, inserted: 0, updated: 0, deleted: 0, errors: [] };
 
@@ -162,13 +162,7 @@ async function syncLocation(locationInfo, googleReviews, dateFrom = null, dateTo
     // Revisar reviews en BD que ya no están en Google → ELIMINADAS
     // Nota: cuando se filtra por fecha, solo se marcan como eliminadas las de ese
     // rango que ya no estén en Google — las de otros meses no se tocan.
-    for (const [reviewId, db] of Object.entries(existing)) {
-      if (dateFrom || dateTo) {
-        const dbDate = (db.createTime || '').slice(0, 10);
-        if (!dbDate) continue;
-        if (dateFrom && dbDate < dateFrom) continue;
-        if (dateTo   && dbDate > dateTo)   continue;
-      }
+    for (const reviewId of Object.keys(existing)) {
       if (!googleMap[reviewId]) {
         operations.push({ action: 'delete', review: { reviewId, locationId } });
       }
@@ -290,7 +284,7 @@ async function runSync(params = {}) {
           log(`  Después de filtro de fecha: ${googleReviews.length} reseñas`);
         }
 
-        const result = await syncLocation(locationInfo, googleReviews, dateFrom, dateTo);
+        const result = await syncLocation(locationInfo, googleReviews);
         const errMsg = result.errors.length ? ` | ${result.errors.length} error(es)` : '';
         log(`  Resultado: +${result.inserted} nuevas, ~${result.updated} actualizadas, -${result.deleted} eliminadas${errMsg}`);
 

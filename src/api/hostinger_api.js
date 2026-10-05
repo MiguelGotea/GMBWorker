@@ -29,21 +29,35 @@ const HEADERS = {
   'X-WSP-Token':  TOKEN
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // ── Helper HTTP ───────────────────────────────────────────────────────────────
 
-async function apiFetch(path, options = {}) {
+async function apiFetch(path, options = {}, retries = 3) {
   const url = `${BASE_URL}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: { ...HEADERS, ...(options.headers || {}) }
-  });
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        ...options,
+        headers: { ...HEADERS, ...(options.headers || {}) }
+      });
 
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`[Hostinger API] ${options.method || 'GET'} ${path} → ${res.status}: ${body}`);
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`[Hostinger API] ${options.method || 'GET'} ${path} → ${res.status}: ${body}`);
+      }
+
+      return await res.json();
+    } catch (err) {
+      if (attempt < retries) {
+        const delay = (attempt + 1) * 1500;
+        console.warn(`[Hostinger API] Error (${err.message}). Reintentando en ${delay}ms (intento ${attempt + 1}/${retries})...`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
   }
-
-  return res.json();
 }
 
 // ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -69,16 +83,44 @@ async function getExistingReviews(locationId) {
 
 /**
  * POST /api/google/reviews/upsert.php
- * Envía un lote de operaciones insert/update/delete.
+ * Envía operaciones insert/update/delete en lotes de 100 para evitar timeouts.
  * @param {string} locationId
  * @param {Array<{action: 'insert'|'update'|'delete', review: object}>} operations
  * @returns {Promise<{success: boolean, inserted: number, updated: number, deleted: number, errors: Array}>}
  */
 async function upsertReviews(locationId, operations) {
-  return apiFetch('/api/google/reviews/upsert.php', {
-    method: 'POST',
-    body: JSON.stringify({ locationId, operations })
-  });
+  if (!operations || operations.length === 0) {
+    return { success: true, inserted: 0, updated: 0, deleted: 0, errors: [] };
+  }
+
+  const BATCH_SIZE = 100;
+  let totalInserted = 0;
+  let totalUpdated = 0;
+  let totalDeleted = 0;
+  const allErrors = [];
+
+  for (let i = 0; i < operations.length; i += BATCH_SIZE) {
+    const chunk = operations.slice(i, i + BATCH_SIZE);
+    const res = await apiFetch('/api/google/reviews/upsert.php', {
+      method: 'POST',
+      body: JSON.stringify({ locationId, operations: chunk })
+    });
+
+    totalInserted += res.inserted || 0;
+    totalUpdated  += res.updated  || 0;
+    totalDeleted  += res.deleted  || 0;
+    if (res.errors && Array.isArray(res.errors)) {
+      allErrors.push(...res.errors);
+    }
+  }
+
+  return {
+    success:  allErrors.length === 0,
+    inserted: totalInserted,
+    updated:  totalUpdated,
+    deleted:  totalDeleted,
+    errors:   allErrors
+  };
 }
 
 module.exports = {

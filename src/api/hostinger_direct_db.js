@@ -115,9 +115,13 @@ async function getLocations() {
 async function getExistingReviews(locationId) {
   const db = getPool();
   const [rows] = await db.query(
+    // ⚠️ NO filtrar por deleted_at IS NULL: si se excluyen los soft-deleted,
+    //    el diff los trata como "nuevos" en el siguiente sync y los re-inserta,
+    //    generando registros duplicados. Se incluyen todos para el cálculo del diff;
+    //    si Google vuelve a enviarla, el UPDATE ya pone deleted_at = NULL.
     `SELECT reviewId, comment, starRating, createTime, updateTime, reviewReplyComment
      FROM ResenasGoogle
-     WHERE locationId = ? AND deleted_at IS NULL`,
+     WHERE locationId = ?`,
     [locationId]
   );
   return { success: true, reviews: rows };

@@ -119,7 +119,7 @@ async function getExistingReviews(locationId) {
     //    el diff los trata como "nuevos" en el siguiente sync y los re-inserta,
     //    generando registros duplicados. Se incluyen todos para el cálculo del diff;
     //    si Google vuelve a enviarla, el UPDATE ya pone deleted_at = NULL.
-    `SELECT reviewId, comment, starRating, createTime, updateTime, reviewReplyComment
+    `SELECT reviewId, comment, starRating, createTime, updateTime, reviewReplyComment, deleted_at
      FROM ResenasGoogle
      WHERE locationId = ?`,
     [locationId]

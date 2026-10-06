@@ -114,14 +114,16 @@ function filterByDate(reviews, dateFrom, dateTo) {
  * Procesa el diff entre Google y la BD para una location.
  * @param {{locationId, locationName, accountId}} locationInfo
  * @param {Array}  googleReviews  reviews (ya filtrados por fecha si aplica)
+ * @param {string|null} dateFrom  YYYY-MM-DD — si viene, el delete solo afecta reviews de ese rango
+ * @param {string|null} dateTo    YYYY-MM-DD
  * @returns {Promise<{locationId, locationName, inserted, updated, deleted, errors}>}
  */
-async function syncLocation(locationInfo, googleReviews) {
+async function syncLocation(locationInfo, googleReviews, dateFrom = null, dateTo = null) {
   const { locationId, locationName } = locationInfo;
   const logEntry = { locationId, locationName, inserted: 0, updated: 0, deleted: 0, errors: [] };
 
   try {
-    // 1. Obtener reviews existentes en nuestra BD
+    // 1. Obtener reviews existentes en nuestra BD (incluye soft-deleted para el diff)
     const existingRes = await hostinger.getExistingReviews(locationId);
     const existing = {};
     for (const r of (existingRes.reviews || [])) {
@@ -151,19 +153,25 @@ async function syncLocation(locationInfo, googleReviews) {
         const replyChanged      = formatted.reviewReplyComment !== (db.reviewReplyComment  || '');
         const createTimeChanged = formatted.createTime        !== (db.createTime         || '');
         const updateTimeChanged = formatted.updateTime        !== (db.updateTime         || '');
+        // Si estaba soft-deleted pero Google la sigue teniendo → restaurar (deleted_at = NULL)
+        const isRestorable      = !!(db.deleted_at);
 
-        if (commentChanged || ratingChanged || replyChanged || createTimeChanged || updateTimeChanged) {
-          // EDITADA, RESPUESTA nueva/editada o FECHA alineada a hora local
+        if (commentChanged || ratingChanged || replyChanged || createTimeChanged || updateTimeChanged || isRestorable) {
           operations.push({ action: 'update', review: formatted });
         }
       }
     }
 
     // Revisar reviews en BD que ya no están en Google → ELIMINADAS
-    // Nota: cuando se filtra por fecha, solo se marcan como eliminadas las de ese
-    // rango que ya no estén en Google — las de otros meses no se tocan.
-    for (const reviewId of Object.keys(existing)) {
+    // ⚠️ IMPORTANTE: cuando hay filtro de fecha, SOLO marcar como eliminadas las reviews
+    // cuyo createTime cae dentro del rango — las de otros meses NO se tocan.
+    for (const [reviewId, dbReview] of Object.entries(existing)) {
       if (!googleMap[reviewId]) {
+        if (dateFrom || dateTo) {
+          const datePart = (dbReview.createTime || '').slice(0, 10);
+          if (dateFrom && datePart < dateFrom) continue; // fuera del rango → no tocar
+          if (dateTo   && datePart > dateTo)   continue; // fuera del rango → no tocar
+        }
         operations.push({ action: 'delete', review: { reviewId, locationId } });
       }
     }
@@ -284,7 +292,7 @@ async function runSync(params = {}) {
           log(`  Después de filtro de fecha: ${googleReviews.length} reseñas`);
         }
 
-        const result = await syncLocation(locationInfo, googleReviews);
+        const result = await syncLocation(locationInfo, googleReviews, dateFrom, dateTo);
         const errMsg = result.errors.length ? ` | ${result.errors.length} error(es)` : '';
         log(`  Resultado: +${result.inserted} nuevas, ~${result.updated} actualizadas, -${result.deleted} eliminadas${errMsg}`);
 
